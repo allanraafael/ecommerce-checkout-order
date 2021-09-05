@@ -3,16 +3,14 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"order/db"
 	"order/queue"
-	"os"
 	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/nu7hatch/gouuid"
+	"github.com/streadway/amqp"
 )
 
 type Product struct {
@@ -32,9 +30,6 @@ type Order struct {
 }
 
 
-var baseUrlProducts string
-
-
 func init() {
 	// Carregando arquivo .env da pasta product
 	err := godotenv.Load(".env")
@@ -42,29 +37,10 @@ func init() {
 	if err != nil {
 		log.Fatalf("Falha ao carregar arquivo .env")
 	}
-
-	// Recebe o valor atríbuido a variável PRODUCT_URL=VALOR no arquivo .env
-	baseUrlProducts = os.Getenv("PRODUCT_URL")
 }
 
 
-func getProductById(id string) Product {
-
-	// Enviando requisição para microsserviço de produto
-	response, err := http.Get(baseUrlProducts + "/products/" + id)
-	if err != nil {
-		fmt.Printf("Falha ao carregar requisição HTTP %s\n", err)
-	}
-	data, _ := ioutil.ReadAll(response.Body)
-
-	var product Product
-	json.Unmarshal(data, &product)
-
-	return product
-}
-
-
-func CreateOrder(payload []byte) {
+func CreateOrder(payload []byte) Order {
 	var order Order
 	json.Unmarshal(payload, &order)
 
@@ -75,6 +51,8 @@ func CreateOrder(payload []byte) {
 	order.CreatedAt = time.Now()
 
 	saveOrder(order)
+
+	return order
 }
 
 
@@ -82,7 +60,6 @@ func saveOrder(order Order) {
 	json, _ := json.Marshal(order)
 
 	connection := db.Connect()
-
 	// Salva no Banco de Dados Redis o conjunto: (chave, valor)
 	err := connection.Set(order.Uuid, string(json), 0).Err()
 
@@ -92,16 +69,22 @@ func saveOrder(order Order) {
 }
 
 
+func notifyOrderCreated(order Order, ch *amqp.Channel) {
+	json, _ := json.Marshal(order)
+	queue.Publisher(json, "order_ex", "", ch)
+}
+
+
 func main() {
 	in := make(chan []byte)
 
 	connection := queue.Connect()
-	queue.Consumer(connection, in)
+	queue.Consumer("checkout_queue", connection, in)
 
 	for payload := range in {
 		fmt.Println("Mensagem consumida: " + string(payload))
 
 		// Criar ordem de serviço
-		CreateOrder(payload)
+		notifyOrderCreated(CreateOrder(payload), connection)
 	}
 }

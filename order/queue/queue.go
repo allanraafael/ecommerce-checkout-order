@@ -44,10 +44,10 @@ func Publisher(payload []byte, exchange string, key string, ch *amqp.Channel) {
 }
 
 
-func Consumer(ch *amqp.Channel, in chan []byte) {
+func Consumer(queue string, ch *amqp.Channel, in chan []byte) {
 
 	q, err := ch.QueueDeclare(
-		os.Getenv("RABBITMQ_CONSUMER_QUEUE"),
+		queue,
 		true,
 		false,
 		false,
